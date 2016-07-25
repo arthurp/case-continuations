@@ -1,10 +1,46 @@
 package org.singingwizard.casecontinuations
 
-import scala.language.experimental.macros
-import scala.reflect.macros.blackbox.Context
+import scala.meta._
 
-object Continuation {
-  def apply(f: () => Unit): Continuation = macro ContinuationImpl.impl
+class continuations extends scala.annotation.StaticAnnotation {
+  inline def apply(defn: Any) = meta {
+    // TODO: Extract all free variables and lift them
+
+    def makeTemplate(cls: Defn.Class) = {
+      val ctorRef = Ctor.Ref.Name(cls.name.value)
+      val self = Term.Param(List(), Name.Anonymous(), None, None)
+      Template(List(), List(q"$ctorRef(args)"), self, None)
+    }
+
+    def convertClosure(f: Tree): (Stat, Stat) = {
+      val ContName = Type.fresh("GeneratedContinuation")
+
+      val q"() => $body" = f
+      val cls = q"""
+        case class $ContName(args: Any) extends (() => Unit) {
+          def apply() = $body
+        }
+      """
+      val newCls = q"new ${makeTemplate(cls)}"
+      (cls, newCls)
+    }
+
+    val q"object $name { ..$stats }" = defn
+    val classes = scala.collection.mutable.Buffer[Stat]()
+    val newStats = stats.map(_.transform {
+      case q"Continuation($f)" =>
+        val (cls, ns) = convertClosure(f)
+        classes += cls
+        ns
+    }).map(_.asInstanceOf[Stat])
+    q"object $name { ..${classes.toList}; ..$newStats }"
+  }
+  /*
+  inline def apply(f: Any) = meta {
+    println(f)
+    q"null"
+  }
+   */
 }
 
 abstract class Continuation extends (() => Unit) {
@@ -13,6 +49,7 @@ abstract class Continuation extends (() => Unit) {
   def pickle(): Any
 }
 
+/*
 class ContinuationImpl(val c: Context) {
   import c.universe._
   import c.internal._
@@ -80,3 +117,4 @@ class ContinuationImpl(val c: Context) {
       }""")
   }
 }
+ */
