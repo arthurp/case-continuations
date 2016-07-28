@@ -16,6 +16,8 @@ abstract class Continuation extends (() => Unit) {
 object ContinuationImpl {
 }
 
+// TODO: Make annotation macro on classes. This macro replaces every reference to Continuation.apply using the same macro below.
+
 class ContinuationImpl(val c: Context) {
   import ContinuationImpl._
   import c.universe._
@@ -24,27 +26,30 @@ class ContinuationImpl(val c: Context) {
 
   import Flag._
 
+  // From scala-reflect
+  object Utils {
     // Create a readable string describing a substitution.
-  private def substituterString(fromStr: String, toStr: String, from: List[Any], to: List[Any]): String = {
-    "subst[%s, %s](%s)".format(fromStr, toStr, (from, to).zipped map (_ + " -> " + _) mkString ", ")
-  }
-
-  // NOTE: calls shallowDuplicate on trees in `to` to avoid problems when symbols in `from`
-  // occur multiple times in the `tree` passed to `transform`,
-  // otherwise, the resulting Tree would be a graph, not a tree... this breaks all sorts of stuff,
-  // notably concerning the mutable aspects of Trees (such as setting their .tpe)
-  class TreeSubstituter(from: List[Symbol], to: List[Tree]) extends Transformer {
-    override def transform(tree: Tree): Tree = tree match {
-      case Ident(_) =>
-        def subst(from: List[Symbol], to: List[Tree]): Tree =
-          if (from.isEmpty) tree
-          else if (tree.symbol == from.head) to.head.duplicate // TODO: does it ever make sense *not* to perform a shallowDuplicate on `to.head`?
-          else subst(from.tail, to.tail)
-        subst(from, to)
-      case _ =>
-        super.transform(tree)
+    private def substituterString(fromStr: String, toStr: String, from: List[Any], to: List[Any]): String = {
+      "subst[%s, %s](%s)".format(fromStr, toStr, (from, to).zipped map (_ + " -> " + _) mkString ", ")
     }
-    override def toString = substituterString("Symbol", "Tree", from, to)
+
+    // NOTE: calls shallowDuplicate on trees in `to` to avoid problems when symbols in `from`
+    // occur multiple times in the `tree` passed to `transform`,
+    // otherwise, the resulting Tree would be a graph, not a tree... this breaks all sorts of stuff,
+    // notably concerning the mutable aspects of Trees (such as setting their .tpe)
+    class TreeSubstituter(from: List[Symbol], to: List[Tree]) extends Transformer {
+      override def transform(tree: Tree): Tree = tree match {
+        case Ident(_) =>
+          def subst(from: List[Symbol], to: List[Tree]): Tree =
+            if (from.isEmpty) tree
+            else if (tree.symbol == from.head) to.head.duplicate // TODO: does it ever make sense *not* to perform a shallowDuplicate on `to.head`?
+            else subst(from.tail, to.tail)
+          subst(from, to)
+        case _ =>
+          super.transform(tree)
+      }
+      override def toString = substituterString("Symbol", "Tree", from, to)
+    }
   }
 
   def impl(f: c.Expr[() => Unit]): c.Expr[Continuation] = {
@@ -67,7 +72,7 @@ class ContinuationImpl(val c: Context) {
     val varSyms = vars.map(_.symbol)
 
     // FIXME: untypecheck hack. This will fail if there are certain patterns in the body
-    val newBody = new TreeSubstituter(varSyms, syms) transform c.untypecheck(body)
+    val newBody = new Utils.TreeSubstituter(varSyms, syms) transform c.untypecheck(body)
 
     val cls =  q"""
       class ${continuationName}(..$params) extends $Continuation {

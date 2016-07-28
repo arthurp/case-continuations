@@ -12,12 +12,12 @@ object Test1 {
     }
      */
     
-    val f: () => Unit = continuation__main_f(x)
+    val f: () => Unit = new continuation__main_f(x)
     
     f()
   }
   
-  case class continuation__main_f(private val x: Int) extends (() => Unit) {
+  class continuation__main_f(private val x: Int) extends (() => Unit) {
     def apply(): Unit = {
       println(x)
     }
