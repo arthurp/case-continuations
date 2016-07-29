@@ -8,12 +8,15 @@ run <<= run in Compile in core
 
 lazy val root = (project in file(".")).
   aggregate(macros, core)
+
+val paradiseVersion = "3.0.0-M3"
   
 lazy val commonSettings = Seq(
   organization := "org.singingwizard",
   version := "0.0.1",
   scalaVersion := "2.11.8",
-  scalacOptions ++= Seq("-deprecation")
+  scalacOptions ++= Seq("-deprecation"),
+  addCompilerPlugin("org.scalamacros" % "paradise" % paradiseVersion cross CrossVersion.full)
 )
 
 lazy val macros = (project in file("macros")).
