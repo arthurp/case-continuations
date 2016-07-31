@@ -21,6 +21,14 @@ class continuations extends StaticAnnotation {
 object ContinuationImpl {
   case class ParentClassAttachment(sym: Any)
   def intermediateContinuation(clsName: String, args: Any*): Continuation = macro ContinuationImpl.onIntermediateContinuation
+
+  case class OrigOwnerAttachment(sym: Any)
+
+  // inspired by https://gist.github.com/retronym/10640845#file-macro2-scala
+  // check out the gist for a detailed explanation of the technique
+  class declSplicer(payload: String) extends StaticAnnotation {
+    def macroTransform(annottees: Any*): Any = macro ContinuationImpl.declSplicerImpl
+  }
 }
 
 class ContinuationImpl(val c: Context) {
@@ -95,9 +103,9 @@ class ContinuationImpl(val c: Context) {
 
     val intermediate = q"""
       object $name extends ..$parents {
-        ..${classes.toList}
-        ..$body
-       }
+        ..${classes.map(declSplicer).toList}
+        ..${body.map(declSplicer)}
+      }
     """
 
     //intermediate.setSymbol(orig.symbol)
@@ -105,7 +113,7 @@ class ContinuationImpl(val c: Context) {
     println(intermediate)
     println(replacements)
 
-    val result  = typingTransform(intermediate)((tree, api) => tree match {
+    val result = typingTransform(intermediate)((tree, api) => tree match {
       case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
         println(tree)
         val rep = replacements(tree)
@@ -115,7 +123,17 @@ class ContinuationImpl(val c: Context) {
         api.default(tree)
     })
 
+    // val q"""
+    //   object $_ extends ..$_ {
+    //     ..$members
+    //    }
+    // """ = result
+    // members foreach { _.changeOwner(enclosingOwner, result.symbol) }
+
     println(result)
+
+    // println((enclosingOwner.asType.toType.decls, orig.symbol, result.symbol))
+    // enclosingOwner.asType.toType.decls.unlink(orig.symbol)
 
     c.Expr[Any](result)
   }
@@ -145,12 +163,11 @@ class ContinuationImpl(val c: Context) {
     val clsUntyped =  q"""
       class ${continuationName}(..$params) extends $Continuation {
         def apply() = { $newBody }
-        def pickle() = { ${f.tree.toString + " " + params} }
+        def pickle() = ???
       } 
-      """
-    val cls = c.typecheck(clsUntyped)
-    println(s"gen'd class: ${cls.symbol}")
-
+      """ // { ${f.tree.toString + " " + params} }
+    val cls = c.typecheck(clsUntyped) //.changeOwner(enclosingOwner, parentCls)
+    println(s"gen'd class: ${cls.symbol} $parentCls")
 
     //val clsName = q"${continuationName.toString}"
     //clsName.updateAttachment(ParentClassAttachment(parentCls))
@@ -169,5 +186,36 @@ class ContinuationImpl(val c: Context) {
     val result = q"new ${continuationSym}(..$args)"
     println(result)
     result
+  }
+
+
+  def declSplicer(tree: c.Tree): c.Tree = {
+    val attach = OrigOwnerAttachment(enclosingOwner)
+    val payload = q"${enclosingOwner.toString}"
+    payload.updateAttachment(attach)
+    val declSplicerAnnotation = q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($payload)"
+    def extendMods(mods: Modifiers) = {
+      val Modifiers(flags, priWithin, annotations) = mods
+      Modifiers(flags, priWithin, declSplicerAnnotation :: annotations)
+    }
+
+    val result = tree match {
+      case DefDef(mods, name, tparams, vparamss, tpt, rhs) =>
+        DefDef(extendMods(mods), name, tparams, vparamss, tpt, rhs)
+      case ClassDef(mods, name, tparams, impl) =>
+        ClassDef(extendMods(mods), name, tparams, impl)
+    }
+
+    result
+  }
+
+  def declSplicerImpl(annottees: c.Tree*): c.Tree = {
+    val q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($payload).macroTransform($_)" = c.macroApplication
+    println(showRaw(payload))
+    val tree = annottees.head
+    val attachee = payload
+    println((attachee, attachee.attachments.get[OrigOwnerAttachment])) 
+    val origOwner = attachee.attachments.get[OrigOwnerAttachment].map(_.sym).get.asInstanceOf[Symbol]
+    c.internal.changeOwner(tree, origOwner, c.internal.enclosingOwner)
   }
 }
