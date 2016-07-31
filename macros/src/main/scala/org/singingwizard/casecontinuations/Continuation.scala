@@ -22,7 +22,7 @@ object ContinuationImpl {
   case class ParentClassAttachment(sym: Any)
   def intermediateContinuation(clsName: String, args: Any*): Continuation = macro ContinuationImpl.onIntermediateContinuation
 
-  case class OrigOwnerAttachment(sym: Any)
+  case class OrigOwnerAttachment(sym: Any, origTree: Option[Any])
 
   // inspired by https://gist.github.com/retronym/10640845#file-macro2-scala
   // check out the gist for a detailed explanation of the technique
@@ -75,6 +75,7 @@ class ContinuationImpl(val c: Context) {
 
     // TODO: Throw an error if the annotation is not on a class or object.
     // TODO: Support performing transformation on classes.
+
     assert(annottee == EmptyTree)
     assert(expandees.size == 1)
     assert(expandees.head.isDef)
@@ -101,39 +102,29 @@ class ContinuationImpl(val c: Context) {
 
     body foreach ContinuationProcessor.traverse
 
+    def replaceContinuations(t: Tree) = {
+      transform(t)((tree, api) => tree match {
+        case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
+          val rep = replacements(tree)
+          rep
+        case _ =>
+          api.default(tree)
+      })
+    }
+
+    println(replacements)
+
     val intermediate = q"""
       object $name extends ..$parents {
-        ..${classes.map(declSplicer).toList}
-        ..${body.map(declSplicer)}
+        ..${classes.map(declSplicer(true)).toList}
+        ..${body.map(replaceContinuations).map(declSplicer(true))}
       }
     """
 
-    //intermediate.setSymbol(orig.symbol)
 
-    println(intermediate)
-    println(replacements)
-
-    val result = typingTransform(intermediate)((tree, api) => tree match {
-      case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
-        println(tree)
-        val rep = replacements(tree)
-        println(rep)
-        api.typecheck(rep)
-      case _ =>
-        api.default(tree)
-    })
-
-    // val q"""
-    //   object $_ extends ..$_ {
-    //     ..$members
-    //    }
-    // """ = result
-    // members foreach { _.changeOwner(enclosingOwner, result.symbol) }
+    val result = intermediate
 
     println(result)
-
-    // println((enclosingOwner.asType.toType.decls, orig.symbol, result.symbol))
-    // enclosingOwner.asType.toType.decls.unlink(orig.symbol)
 
     c.Expr[Any](result)
   }
@@ -166,13 +157,13 @@ class ContinuationImpl(val c: Context) {
         def pickle() = ???
       } 
       """ // { ${f.tree.toString + " " + params} }
-    val cls = c.typecheck(clsUntyped) //.changeOwner(enclosingOwner, parentCls)
+    val cls = c.typecheck(clsUntyped)
     println(s"gen'd class: ${cls.symbol} $parentCls")
 
     //val clsName = q"${continuationName.toString}"
     //clsName.updateAttachment(ParentClassAttachment(parentCls))
     //val call = q"_root_.org.singingwizard.casecontinuations.ContinuationImpl.intermediateContinuation($clsName, ..$vars)"
-    val call = q"new ${cls.symbol}(..$vars)"
+    val call = c.typecheck(q"new ${cls.symbol}(..$vars)")
 
     (cls, call)
   }
@@ -189,8 +180,8 @@ class ContinuationImpl(val c: Context) {
   }
 
 
-  def declSplicer(tree: c.Tree): c.Tree = {
-    val attach = OrigOwnerAttachment(enclosingOwner)
+  def declSplicer(useOrig: Boolean)(tree: c.Tree): c.Tree = {
+    val attach = OrigOwnerAttachment(enclosingOwner, if(useOrig) Some(tree) else None)
     val payload = q"${enclosingOwner.toString}"
     payload.updateAttachment(attach)
     val declSplicerAnnotation = q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($payload)"
@@ -210,12 +201,15 @@ class ContinuationImpl(val c: Context) {
   }
 
   def declSplicerImpl(annottees: c.Tree*): c.Tree = {
-    val q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($payload).macroTransform($_)" = c.macroApplication
-    println(showRaw(payload))
+    val q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($attachee).macroTransform($_)" = c.macroApplication
     val tree = annottees.head
-    val attachee = payload
-    println((attachee, attachee.attachments.get[OrigOwnerAttachment])) 
-    val origOwner = attachee.attachments.get[OrigOwnerAttachment].map(_.sym).get.asInstanceOf[Symbol]
-    c.internal.changeOwner(tree, origOwner, c.internal.enclosingOwner)
+    val attach = attachee.attachments.get[OrigOwnerAttachment].get
+    val origOwner = attach.sym.asInstanceOf[Symbol]
+    val origTree = attach.origTree.asInstanceOf[Option[c.Tree]]
+    println((origOwner, tree, origTree, enclosingOwner))
+    origTree match {
+      case Some(t) => t.changeOwner(origOwner, enclosingOwner)
+      case None => tree.changeOwner(origOwner, enclosingOwner)
+    }
   }
 }
