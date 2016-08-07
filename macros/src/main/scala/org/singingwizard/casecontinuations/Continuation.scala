@@ -65,7 +65,7 @@ class ContinuationImpl(val c: Context) {
     }
   }
 
-  def onClass(annottees: c.Tree*): c.Expr[Any] = {
+  def onClass(annottees: c.Tree*): Tree = {
     val (annottee, expandees) = annottees.toList match {
       case (param: ValDef) :: (rest @ (_ :: _)) => (param, rest)
       case (param: TypeDef) :: (rest @ (_ :: _)) => (param, rest)
@@ -81,55 +81,90 @@ class ContinuationImpl(val c: Context) {
     assert(expandees.head.isDef)
 
     val orig = c.typecheck(expandees.head)
-    println(orig)
-    val q"object $name extends ..$parents { ..$body }" = orig
 
-    val classes = scala.collection.mutable.Buffer[c.Tree]()
-    val replacements = scala.collection.mutable.HashMap[c.Tree, c.Tree]()
+    //val q"object $name extends ..$parents { ..$body }" = orig
 
+    /*
+    val classes = scala.collection.mutable.HashMap[TypeName, ClassDef]()
+
+    // Collect information about continuations
     val Continuation_apply = typeOf[Continuation.type].member(TermName("apply")).asMethod
+
+    case class ContinuationReplacement(name: TypeName, vars: List[Tree])
 
     object ContinuationProcessor extends Traverser {
       override def traverse(tree: Tree): Unit = tree match {
         case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
           println(tree)
-          val (cls, call) = onContinuation(arg, orig.symbol)
-          classes += cls
-          replacements += (tree -> call)
+          val (cls, vars) = onContinuation(arg, orig.symbol)
+          classes += (cls.name -> cls)
+          tree.updateAttachment(ContinuationReplacement(cls.name, vars))
         case _ => super.traverse(tree)
       }
     }
 
-    body foreach ContinuationProcessor.traverse
+    ContinuationProcessor.traverse(orig)
 
-    def replaceContinuations(t: Tree) = {
-      transform(t)((tree, api) => tree match {
-        case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
-          val rep = replacements(tree)
-          rep
-        case _ =>
-          api.default(tree)
-      })
-    }
+    println("====== Closures:")
+    println(classes.values.mkString("\n"))
+    println("--------------")
 
-    println(replacements)
+    // Perform in place replacements
+    val updated = typingTransform(orig)((tree, api) => tree match {
+      //case m@ModuleDef(mods, name, Template(parents, self, body)) if m.symbol == orig.symbol => {
+      //  val i1 = ModuleDef(mods, name, Template(parents, self, classes.values.toList ++ body))
+      //  api.default(i1)
+      //}
+      case Apply(callee, List(arg)) if callee.symbol == Continuation_apply =>
+        val ContinuationReplacement(closureName, vars) = tree.attachments.get[ContinuationReplacement].get
+        //api.typecheck(q"new $closureName(..$vars)")
+        api.default(tree)
+      case _ =>
+        api.default(tree)
+    })
 
+    val result = updated
+     */
+
+    val result = typingTransform(orig)((tree, api) => tree match {
+      case _ =>
+        api.default(tree)
+    })
+
+
+    /*
+    // Build the new object
     val intermediate = q"""
       object $name extends ..$parents {
         ..${classes.map(declSplicer(true)).toList}
-        ..${body.map(replaceContinuations).map(declSplicer(true))}
+        ..${body.map(replaceContinuations).map(declSplicer(true, orig.symbol.asModule.moduleClass))}
       }
     """
-
-
     val result = intermediate
+     */
 
-    println(result)
+    //MAYBE:
+    // * Attach the same symbol to the object
 
-    c.Expr[Any](result)
+
+    // TODO: Make sure symbol table is correct WRT new arrangement (The current tricks with declSplicer might be enough)
+
+    //MAYBE:
+    // This last part may not be needed since the it should be generated correctly if the symbol table is correct when the returned object is type checked.
+    // * Rebuild the ClassInfoType for the object type (with all both classes and and all the original members)
+
+    /*
+    TODO: I think part of the problem is that the symbol table is incorrect when the new object is typechecked. This may be resulting in test being left out.
+      It's not clear what order to set things up in. But if I do it all by hand I should be able to get it right.
+     */
+
+
+    println(s"result: $result")
+
+    result
   }
 
-  def onContinuation(f: c.Tree, parentCls: Symbol): (c.Tree, c.Tree) = {
+  def onContinuation(f: c.Tree, parentCls: Symbol): (ClassDef, List[Tree]) = {
     val q"""() => $body""" = f
 
     val Continuation = tq"_root_.org.singingwizard.casecontinuations.Continuation"
@@ -157,22 +192,28 @@ class ContinuationImpl(val c: Context) {
         def pickle() = ???
       } 
       """ // { ${f.tree.toString + " " + params} }
-    val cls = c.typecheck(clsUntyped)
-    println(s"gen'd class: ${cls.symbol} $parentCls")
+    //val cls = c.typecheck(clsUntyped).asInstanceOf[ClassDef]
+    //println(s"gen'd class: ${cls.symbol} $parentCls")
 
     //val clsName = q"${continuationName.toString}"
     //clsName.updateAttachment(ParentClassAttachment(parentCls))
     //val call = q"_root_.org.singingwizard.casecontinuations.ContinuationImpl.intermediateContinuation($clsName, ..$vars)"
-    val call = c.typecheck(q"new ${cls.symbol}(..$vars)")
-
-    (cls, call)
+    //val call = q"new ${cls.symbol}(..$vars)"
+    (clsUntyped, vars)
   }
+
+  def intermediateContinuation(parentCls: Symbol, continuationName: TypeName, vars: List[Tree]): Tree = {
+    val clsName = q"${continuationName.toString}"
+    clsName.updateAttachment(ParentClassAttachment(parentCls))
+    q"_root_.org.singingwizard.casecontinuations.ContinuationImpl.intermediateContinuation($clsName, ..$vars)"
+  }
+
 
   def onIntermediateContinuation(clsName: c.Tree, args: c.Tree*): c.Tree = {
     val Literal(Constant(name: String)) = clsName
     println((name, args))
     val parentClsSym = clsName.attachments.get[ParentClassAttachment].map(_.sym).get.asInstanceOf[Symbol].asModule
-    val continuationSym = parentClsSym.moduleClass.asClass.toType.member(TermName(name))
+    val continuationSym = parentClsSym.moduleClass.asClass.toType.member(TypeName(name))
     println((parentClsSym, continuationSym))
     val result = q"new ${continuationSym}(..$args)"
     println(result)
@@ -180,9 +221,10 @@ class ContinuationImpl(val c: Context) {
   }
 
 
-  def declSplicer(useOrig: Boolean)(tree: c.Tree): c.Tree = {
-    val attach = OrigOwnerAttachment(enclosingOwner, if(useOrig) Some(tree) else None)
-    val payload = q"${enclosingOwner.toString}"
+  def declSplicer(useOrig: Boolean, origOwner: Symbol = null)(tree: c.Tree): c.Tree = {
+    val owner = if(origOwner == null) enclosingOwner else origOwner 
+    val attach = OrigOwnerAttachment(owner, if(useOrig) Some(tree) else None)
+    val payload = q"${owner.toString}"
     payload.updateAttachment(attach)
     val declSplicerAnnotation = q"new _root_.org.singingwizard.casecontinuations.ContinuationImpl.declSplicer($payload)"
     def extendMods(mods: Modifiers) = {

@@ -1,5 +1,6 @@
 package org.singingwizard.casecontinuations
 
+
 @continuations
 object Test1Impl {
   def test(args: Array[String]): Unit = {
@@ -8,7 +9,6 @@ object Test1Impl {
     println(k.pickle())
   }
 }
-
 
 object Test1 {
   def main(args: Array[String]): Unit = {

@@ -27,7 +27,10 @@ lazy val macros = (project in file("macros")).
 lazy val core = (project in file("core")).
   settings(commonSettings: _*).settings(
     scalacOptions ++= Seq("-Xprint:typer"),
-    scalacOptions ++= Seq("-uniqid"),
+    //scalacOptions ++= Seq("-uniqid"),
+    scalacOptions ++= Seq("-Xprint-types"),
+    //scalacOptions ++= Seq("-Ylog:<phase>"),
+    //scalacOptions ++= Seq("-Ylog:typer"),
     scalacOptions ++= Seq("-Yshow-syms")
   ) dependsOn macros
 
