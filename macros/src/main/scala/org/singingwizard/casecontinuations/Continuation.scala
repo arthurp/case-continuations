@@ -1,18 +1,19 @@
 package org.singingwizard.casecontinuations
 
 import scala.language.experimental.macros
-import scala.reflect.macros.whitebox.Context
+import scala.reflect.macros.blackbox.Context
 import scala.annotation.StaticAnnotation
 
 object Continuation {
-  def apply(f: () => Unit): Continuation = ??? // macro ContinuationImpl.impl
+  def apply(f: () => Unit): Continuation = macro ContinuationImpl.onContinuation
 }
 
 abstract class Continuation extends (() => Unit) {
   def apply(): Unit
-  
-  def pickle(): Any
+  def pickle(): ContinuationPickle
 }
+
+case class ContinuationPickle(clsName: String, vars: Array[Any])
 
 class continuations extends StaticAnnotation {
   def macroTransform(annottees: Any*): Any = macro ContinuationImpl.onClass
@@ -36,6 +37,7 @@ class ContinuationImpl(val c: Context) {
   import c.universe._
   import c.internal._
   import decorators._
+  import c.{Expr}
 
   import Flag._
 
@@ -65,7 +67,7 @@ class ContinuationImpl(val c: Context) {
     }
   }
 
-  def onClass(annottees: c.Tree*): Tree = {
+  def onClass(annottees: Expr[Any]*): Expr[Any] = {
     val (annottee, expandees) = annottees.toList match {
       case (param: ValDef) :: (rest @ (_ :: _)) => (param, rest)
       case (param: TypeDef) :: (rest @ (_ :: _)) => (param, rest)
@@ -78,9 +80,9 @@ class ContinuationImpl(val c: Context) {
 
     assert(annottee == EmptyTree)
     assert(expandees.size == 1)
-    assert(expandees.head.isDef)
+    assert(expandees.head.tree.isDef)
 
-    val orig = c.typecheck(expandees.head)
+    val orig = expandees.head.tree
 
     //val q"object $name extends ..$parents { ..$body }" = orig
 
@@ -126,10 +128,12 @@ class ContinuationImpl(val c: Context) {
     val result = updated
      */
 
+    /*
     val result = typingTransform(orig)((tree, api) => tree match {
       case _ =>
         api.default(tree)
     })
+     */
 
 
     /*
@@ -159,15 +163,16 @@ class ContinuationImpl(val c: Context) {
      */
 
 
-    println(s"result: $result")
+    //println(s"result: $result")
 
-    result
+    Expr[Any](orig)
   }
 
-  def onContinuation(f: c.Tree, parentCls: Symbol): (ClassDef, List[Tree]) = {
+  def onContinuation(f: Tree): Tree = {
     val q"""() => $body""" = f
 
     val Continuation = tq"_root_.org.singingwizard.casecontinuations.Continuation"
+    val ContinuationPickle = tq"_root_.org.singingwizard.casecontinuations.ContinuationPickle"
 
     val continuationName = c.freshName(TypeName("Continuation"))
 
@@ -186,20 +191,21 @@ class ContinuationImpl(val c: Context) {
     // FIXME: untypecheck hack. This will fail if there are certain patterns in the body
     val newBody = new Utils.TreeSubstituter(varSyms, syms) transform c.untypecheck(body)
 
-    val clsUntyped =  q"""
-      class ${continuationName}(..$params) extends $Continuation {
+    val cls =  q"""
+      class $continuationName(..$params) extends $Continuation {
         def apply() = { $newBody }
-        def pickle() = ???
+        def pickle() = new $ContinuationPickle(classOf[$continuationName].getName(), Array(..$syms))
       } 
-      """ // { ${f.tree.toString + " " + params} }
-    //val cls = c.typecheck(clsUntyped).asInstanceOf[ClassDef]
-    //println(s"gen'd class: ${cls.symbol} $parentCls")
+      """
+    val call = q"new ${continuationName}(..$vars)"
 
-    //val clsName = q"${continuationName.toString}"
-    //clsName.updateAttachment(ParentClassAttachment(parentCls))
-    //val call = q"_root_.org.singingwizard.casecontinuations.ContinuationImpl.intermediateContinuation($clsName, ..$vars)"
-    //val call = q"new ${cls.symbol}(..$vars)"
-    (clsUntyped, vars)
+    println(cls)
+    println(call)
+
+    q"""
+    $cls
+    $call
+    """
   }
 
   def intermediateContinuation(parentCls: Symbol, continuationName: TypeName, vars: List[Tree]): Tree = {
